@@ -305,9 +305,8 @@ public final class DHistogram extends Iced {
       assert(_nbin>1);
       _splitPts = new double[_nbin];
       _splitPts[0] = 0;
-      _splitPts[_nbin - 1] = _nbin-1;
-      for (int i = 1; i < _nbin-1; ++i)
-         _splitPts[i] = rng.nextFloat() * (_nbin-1);
+      for (int i = 1; i < _nbin; ++i)
+         _splitPts[i] = rng.nextFloat() * _nbin;
       Arrays.sort(_splitPts);
     }
     else if (_histoType== SharedTreeModel.SharedTreeParameters.HistogramType.QuantilesGlobal) {
