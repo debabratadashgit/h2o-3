@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
+import java.util.function.Function;
 
 public abstract class SharedTree<
     M extends SharedTreeModel<M,P,O>, 
@@ -285,45 +286,15 @@ public abstract class SharedTree<
         // non-numeric columns get a vector full of NAs
         if (_parms._histogram_type == SharedTreeModel.SharedTreeParameters.HistogramType.QuantilesGlobal
                 || _parms._histogram_type == SharedTreeModel.SharedTreeParameters.HistogramType.RoundRobin) {
-          int N = _parms._nbins;
-          QuantileModel.QuantileParameters p = new QuantileModel.QuantileParameters();
-          Key rndKey = Key.make();
-          if (DKV.get(rndKey)==null) DKV.put(rndKey, _train);
-          p._train = rndKey;
-          p._weights_column = _parms._weights_column;
-          p._combine_method = QuantileModel.CombineMethod.INTERPOLATE;
-          p._probs = new double[N];
-          for (int i = 0; i < N; ++i) //compute quantiles such that they span from (inclusive) min...maxEx (exclusive)
-            p._probs[i] = i * 1./N;
-          Job<QuantileModel> job = new Quantile(p).trainModel();
           _job.update(1, "Computing top-level histogram splitpoints.");
-          QuantileModel qm = job.get();
-          job.remove();
-          double[][] origQuantiles = qm._output._quantiles;
-          //pad the quantiles until we have nbins_top_level bins
-          double[][] splitPoints = new double[origQuantiles.length][];
-          Key[] keys = new Key[splitPoints.length];
-          for (int i=0;i<keys.length;++i)
-            keys[i] = getGlobalQuantilesKey(i);
-          for (int i=0;i<origQuantiles.length;++i) {
-            if (!_train.vec(i).isNumeric() || _train.vec(i).isCategorical() || _train.vec(i).isBinary() || origQuantiles[i].length <= 1) {
-              keys[i] = null;
-              continue;
-            }
-            // make the quantiles split points unique
-            splitPoints[i] = ArrayUtils.makeUniqueAndLimitToRange(origQuantiles[i], _train.vec(i).min(), _train.vec(i).max());
-            if (splitPoints[i].length <= 1) //not enough split points left - fall back to regular binning
-              splitPoints[i] = null;
-            else
-              splitPoints[i] = ArrayUtils.padUniformly(splitPoints[i], _parms._nbins_top_level);
-            assert splitPoints[i] == null || splitPoints[i].length > 1;
-            if (splitPoints[i]!=null && keys[i]!=null) {
-              LOG.debug("Creating quantiles for column " + i + " (key: "+ keys[i] +")");
-              DKV.put(new DHistogram.HistoQuantiles(keys[i], splitPoints[i]));
+          final double[][] splitPoints = GlobalQuantilesCalc.globalQuantiles(_train, _parms._weights_column, _parms._nbins, _parms._nbins_top_level);
+          for (int i = 0; i < splitPoints.length; i++) {
+            @SuppressWarnings("unchecked")
+            Key<DHistogram.HistoQuantiles> key = getGlobalQuantilesKey(i);
+            if (splitPoints[i] != null && key != null) {
+              DKV.put(new DHistogram.HistoQuantiles(key, splitPoints[i]));
             }
           }
-          qm.delete();
-          DKV.remove(rndKey);
         }
 
         // Also add to the basic working Frame these sets:
