@@ -28,8 +28,9 @@ public class GlobalQuantilesCalcTest extends TestUtil {
       for (int i = 0; i < fr.numCols(); i++) {
         double[] spI = splitPoints[i];
         assertNotNull(spI);
+        // expecting quantiles to span from (inclusive) min...maxEx (exclusive)
         assertEquals(spI[0], fr.vec(i).min(), 0); // first element is minimum
-        assertTrue(spI[spI.length - 1] < fr.vec(i).max() - 1e-3); // last element is not maximum
+        assertTrue(spI[spI.length - 1] < fr.vec(i).max() - 1e-3); // last element is not maximum by a good margin
       }
     } finally {
       Scope.exit(); 

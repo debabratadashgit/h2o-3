@@ -288,13 +288,14 @@ public abstract class SharedTree<
                 || _parms._histogram_type == SharedTreeModel.SharedTreeParameters.HistogramType.RoundRobin) {
           _job.update(1, "Computing top-level histogram splitpoints.");
           final double[][] splitPoints = GlobalQuantilesCalc.globalQuantiles(_train, _parms._weights_column, _parms._nbins, _parms._nbins_top_level);
+          Futures fs = new Futures();
           for (int i = 0; i < splitPoints.length; i++) {
-            @SuppressWarnings("unchecked")
             Key<DHistogram.HistoQuantiles> key = getGlobalQuantilesKey(i);
             if (splitPoints[i] != null && key != null) {
-              DKV.put(new DHistogram.HistoQuantiles(key, splitPoints[i]));
+              DKV.put(new DHistogram.HistoQuantiles(key, splitPoints[i]), fs);
             }
           }
+          fs.blockForPending();
         }
 
         // Also add to the basic working Frame these sets:
@@ -343,7 +344,7 @@ public abstract class SharedTree<
 
       } finally {
         if( _model!=null ) _model.unlock(_job);
-        for (Key k : getGlobalQuantilesKeys()) Keyed.remove(k);
+        for (Key<?> k : getGlobalQuantilesKeys()) Keyed.remove(k);
         if (_validWorkspace != null) {
           _validWorkspace.remove();
           _validWorkspace = null;
@@ -375,13 +376,14 @@ public abstract class SharedTree<
     protected Frame makeValidWorkspace() { return null; }
 
     // Helpers to store quantiles in DKV - keep a cache on each node (instead of sending around over and over)
-    protected Key getGlobalQuantilesKey(int i) {
+    protected Key<DHistogram.HistoQuantiles> getGlobalQuantilesKey(int i) {
       if (_model==null || _model._key == null || _parms._histogram_type!= SharedTreeModel.SharedTreeParameters.HistogramType.QuantilesGlobal
               && _parms._histogram_type!= SharedTreeModel.SharedTreeParameters.HistogramType.RoundRobin) return null;
       return Key.makeSystem(_model._key+"_quantiles_col_"+i);
     }
-    protected Key[] getGlobalQuantilesKeys() {
-      Key[] keys = new Key[_ncols];
+    protected Key<DHistogram.HistoQuantiles>[] getGlobalQuantilesKeys() {
+      @SuppressWarnings("unchecked")
+      Key<DHistogram.HistoQuantiles>[] keys = new Key[_ncols];
       for (int i=0;i<keys.length;++i)
         keys[i] = getGlobalQuantilesKey(i);
       return keys;
