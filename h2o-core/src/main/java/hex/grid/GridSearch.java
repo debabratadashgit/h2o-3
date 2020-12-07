@@ -37,7 +37,7 @@ import static hex.grid.HyperSpaceWalker.BaseWalker.SUBSPACES;
  *
  * By default, the grid search invokes cartesian grid search, but it can be
  * modified by passing explicit hyper space walk strategy via the
- * {@link #startGridSearch(Key, HyperSpaceWalker, boolean, int)} method.
+ * {@link #startGridSearch(Key, HyperSpaceWalker, Recovery, int)} method.
  *
  * If any of forked jobs fails then the failure is ignored, and grid search
  * normally continue in traversing the hyper space.
@@ -67,12 +67,12 @@ import static hex.grid.HyperSpaceWalker.BaseWalker.SUBSPACES;
  * }</pre>
  *
  * @see HyperSpaceWalker
- * @see #startGridSearch(Key, HyperSpaceWalker, boolean, int)
+ * @see #startGridSearch(Key, HyperSpaceWalker, Recovery, int)
  */
-public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSearch> {
+public final class GridSearch<MP extends Model.Parameters> {
   public final Key<Grid> _result;
   public final Job<Grid> _job;
-  public final boolean _exportFrames;
+  public final Recovery<Grid> _recovery;
   public final int _parallelism;
 
   /** Walks hyper space and for each point produces model parameters. It is
@@ -80,15 +80,17 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
   private final transient HyperSpaceWalker<MP, ?> _hyperSpaceWalker;
 
   private GridSearch(
-      Key<Grid> gkey, HyperSpaceWalker<MP, ?> hyperSpaceWalker, 
-      final boolean exportFrames, final int parallelism
+      final Key<Grid> gkey, 
+      final HyperSpaceWalker<MP, ?> hyperSpaceWalker, 
+      final Recovery<Grid> recovery, 
+      final int parallelism
   ) {
     assert hyperSpaceWalker != null : "Grid search needs to know how to walk around hyper space!";
     _hyperSpaceWalker = hyperSpaceWalker;
     _result = gkey;
     String algoName = hyperSpaceWalker.getParams().algoName();
     _job = new Job<>(gkey, Grid.class.getName(), algoName + " Grid Search");
-    _exportFrames = exportFrames;
+    _recovery = recovery;
     _parallelism = parallelism;
     // Note: do not validate parameters of created model builders here!
     // Leave it to launch time, and just mark the corresponding model builder job as failed.
@@ -133,12 +135,13 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
           throw new IllegalArgumentException(String.format("Grid search parallelism level must be >= 1. Give value is '%d'.",
                   _parallelism));
         }
+        afterGridCompleted(grid);
         tryComplete();
       }
 
       @Override
       public boolean onExceptionalCompletion(Throwable ex, CountedCompleter caller) {
-        Log.warn("GridSearch job "+_job._description+" completed with exception: "+ex);
+        Log.warn("GridSearch job " + _job._description + " completed with exception: " + ex);
         return true;
       }
     }, gridWork, maxRuntimeSecs());
@@ -231,7 +234,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
       try {
         parallelSearchGridLock.lock();
         constructScoringInfo(finishedModel);
-        grid.putModel(finishedModel._input_parms.checksum(IGNORED_FIELDS_PARAM_HASH), finishedModel._key);
+        onModel(grid, finishedModel._input_parms.checksum(IGNORED_FIELDS_PARAM_HASH), finishedModel._key);
 
         _job.update(1);
         grid.update(_job);
@@ -457,9 +460,21 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
   }
   
   private void beforeGridStart(Grid grid) {
-    if (_exportFrames) {
-      attemptGridSave(grid);
-      new Recovery<Grid>(_hyperSpaceWalker.getParams()._export_checkpoints_dir).exportReferences(grid);
+    if (_recovery != null) {
+      _recovery.onStart(grid);
+    }
+  }
+  
+  private void afterGridCompleted(Grid grid) {
+    if (_recovery != null) {
+      _recovery.onDone(grid);
+    }
+  }
+  
+  private void onModel(Grid grid, long checksum, Key<Model> modelKey) {
+    grid.putModel(checksum, modelKey);
+    if (_recovery != null) {
+      _recovery.onModel(grid, modelKey);
     }
   }
   
@@ -471,7 +486,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
   private void attemptGridSave(final Grid grid) {
     final String checkpointsDir = _hyperSpaceWalker.getParams()._export_checkpoints_dir;
     if (checkpointsDir == null) return;
-    grid.exportBinary(checkpointsDir);
+    grid.exportBinary(checkpointsDir + "/" + grid._key);
   }
 
   static final Set<String> IGNORED_FIELDS_PARAM_HASH = Collections.singleton("_export_checkpoints_dir");
@@ -548,7 +563,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
     }).keys();
 
     if (modelKeys.length > 0) {
-      grid.putModel(checksum, modelKeys[0]);
+      onModel(grid, checksum, modelKeys[0]);
       return modelKeys[0].get();
     }
 
@@ -560,7 +575,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
     Model m = ModelBuilder.trainModelNested(_job, result, params, null);
     assert checksum == m._input_parms.checksum(IGNORED_FIELDS_PARAM_HASH) : 
         "Model checksum different from original params";
-    grid.putModel(checksum, result);
+    onModel(grid, checksum, result);
     return m;
   }
   
@@ -592,7 +607,8 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
    *                             fully-filled-in grid search.
    * @param paramsBuilderFactory defines a strategy for creating a new model parameters based on
    *                             common parameters and list of hyper-parameters
-   * @param exportFrames         In combination with export_checpoints_dir also export frames
+   * @param recovery             Defines recovery strategy for when the cluster crashes while grid is 
+   *                             training models.
    * @param parallelism          Level of model-building parallelism
    * @return GridSearch Job, with models run with these parameters, built as needed - expected to be
    * an expensive operation.  If the models in question are "in progress", a 2nd build will NOT be
@@ -604,13 +620,13 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
           final Map<String, Object[]> hyperParams,
           final ModelParametersBuilderFactory<MP> paramsBuilderFactory,
           final HyperSpaceSearchCriteria searchCriteria,
-          final boolean exportFrames,
+          final Recovery<Grid> recovery,
           final int parallelism) {
 
     return startGridSearch(
             destKey,
             BaseWalker.WalkerFactory.create(params, hyperParams, paramsBuilderFactory, searchCriteria),
-            exportFrames,
+            recovery,
             parallelism
     );
   }
@@ -629,7 +645,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
    * @return GridSearch Job, with models run with these parameters, built as needed - expected to be
    * an expensive operation.  If the models in question are "in progress", a 2nd build will NOT be
    * kicked off.  This is a non-blocking call.
-   * @see #startGridSearch(Key, Model.Parameters, Map, ModelParametersBuilderFactory, HyperSpaceSearchCriteria, boolean, int)
+   * @see #startGridSearch(Key, Model.Parameters, Map, ModelParametersBuilderFactory, HyperSpaceSearchCriteria, Recovery, int)
    */
   public static <MP extends Model.Parameters> Job<Grid> startGridSearch(
           final Key<Grid> destKey,
@@ -639,9 +655,9 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
             destKey,
             params,
             hyperParams,
-            new SimpleParametersBuilderFactory<MP>(),
+            new SimpleParametersBuilderFactory<>(),
             new HyperSpaceSearchCriteria.CartesianSearchCriteria(),
-            false,
+            null,
             GridSearch.SEQUENTIAL_MODEL_BUILDING
     );
   }
@@ -663,7 +679,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
    * an expensive operation.  If the models in question are "in progress", a 2nd build will NOT be
    * kicked off.  This is a non-blocking call.
    *
-   * @see #startGridSearch(Key, Model.Parameters, Map, ModelParametersBuilderFactory, HyperSpaceSearchCriteria, boolean, int)
+   * @see #startGridSearch(Key, Model.Parameters, Map, ModelParametersBuilderFactory, HyperSpaceSearchCriteria, Recovery, int)
    */
   public static <MP extends Model.Parameters> Job<Grid> startGridSearch(
           final Key<Grid> destKey,
@@ -677,7 +693,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
             hyperParams,
             new SimpleParametersBuilderFactory<MP>(),
             new HyperSpaceSearchCriteria.CartesianSearchCriteria(),
-            false,
+            null,
             parallelism
     );
   }
@@ -687,9 +703,10 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
    * parameters based on specified strategy.
    *
    * @param destKey          A key to store result of grid search under.
-   * @param hyperSpaceWalker defines a strategy for traversing a hyper space. The object itself
+   * @param hyperSpaceWalker Defines a strategy for traversing a hyper space. The object itself
    *                         holds definition of hyper space.
-   * @param exportFrames     In combination with export_checpoints_dir also export frames
+   * @param recovery         Defines recovery strategy for when the cluster crashes while grid is 
+   *                         training models.
    * @param parallelism      Level of parallelism during the process of building of the grid models
    * @return GridSearch Job, with models run with these parameters, built as needed - expected to be
    * an expensive operation.  If the models in question are "in progress", a 2nd build will NOT be
@@ -698,7 +715,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
   public static <MP extends Model.Parameters> Job<Grid> startGridSearch(
           final Key<Grid> destKey,
           final HyperSpaceWalker<MP, ?> hyperSpaceWalker,
-          final boolean exportFrames,
+          final Recovery<Grid> recovery,
           final int parallelism
   ) {
     // Compute key for destination object representing grid
@@ -707,7 +724,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
             : gridKeyName(params.algoName(), params.train());
 
     // Start the search
-    return new GridSearch<>(gridKey, hyperSpaceWalker, exportFrames, parallelism).start();
+    return new GridSearch<>(gridKey, hyperSpaceWalker, recovery, parallelism).start();
   }
 
   /**

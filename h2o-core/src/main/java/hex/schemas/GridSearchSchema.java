@@ -56,9 +56,9 @@ public class GridSearchSchema<G extends Grid<MP>,
       "parallelism. Any number > 1 sets the exact number of models built in parallel.")
   public int parallelism;
   
-  @API(help= "If true, with combination with export_checpoints_dir will also save data frames.", 
+  @API(help= "Path to a directory where grid will save everything necessary to resume training after cluster crash.", 
       direction = INPUT)
-  public boolean checkpoint_frames;
+  public String recovery_dir;
   
   //
   // Outputs
@@ -162,12 +162,9 @@ public class GridSearchSchema<G extends Grid<MP>,
       this.parallelism = SEQUENTIAL_GRID_SEARCH;
     }
 
-    if (parms.containsKey("checkpoint_frames")) {
-      final String checkpointFramesProperty = parms.getProperty("checkpoint_frames");
-      this.checkpoint_frames = Boolean.parseBoolean(checkpointFramesProperty);
+    if (parms.containsKey("recovery_dir")) {
+      this.recovery_dir = parms.getProperty("recovery_dir");
       parms.remove("checkpoint_frames");
-    } else {
-      this.checkpoint_frames = false;
     }
 
     // Do not check validity of parameters, GridSearch is tolerant of bad

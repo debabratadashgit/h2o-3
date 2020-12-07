@@ -2244,6 +2244,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         } else if (_earlyStop) {
           Log.info("Stopping GLM training due to hitting earlyStopping criteria.");
         } else {
+          DKV.remove(_job._result);
           throw new Job.JobCancelledException();
         }
       }

@@ -52,7 +52,7 @@ public class SequentialWalkerTest {
                             new GridSearch.SimpleParametersBuilderFactory<>(),
                             new HyperSpaceSearchCriteria.SequentialSearchCriteria()
                     ),
-                    false,
+                    null,
                     GridSearch.SEQUENTIAL_MODEL_BUILDING
             );
             Scope.track_generic(job);
@@ -113,7 +113,7 @@ public class SequentialWalkerTest {
                                     .stoppingTolerance(0.1)
                                     .build())
                     ),
-                    false,
+                    null,
                     GridSearch.SEQUENTIAL_MODEL_BUILDING
             );
             Scope.track_generic(job);

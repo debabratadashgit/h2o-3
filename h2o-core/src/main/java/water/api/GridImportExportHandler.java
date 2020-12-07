@@ -1,6 +1,5 @@
 package water.api;
 
-import hex.Model;
 import hex.faulttolerance.Recovery;
 import hex.grid.Grid;
 import water.*;
@@ -40,11 +39,9 @@ public class GridImportExportHandler extends Handler {
     if (!PersistUtils.exists(gridUri)) {
       throw new IllegalArgumentException("File not found " + gridUri);
     }
-    final URI gridFramesUri = FileUtils.getURI(gridImportV3.grid_path + REFERENCES_META_FILE_SUFFIX);
-    if (gridImportV3.load_frames && !PersistUtils.exists(gridFramesUri)) {
-      throw new IllegalArgumentException("Requested to load with data frames, but the grid was saved without frames.");
-    }
     final Persist persist = H2O.getPM().getPersistForURI(gridUri);
+    final String gridDirectory = persist.getParent(gridUri.toString());
+    final Recovery<Grid> recovery = new Recovery<>(gridDirectory);
     try (final InputStream inputStream = persist.open(gridUri.toString())) {
       final AutoBuffer gridAutoBuffer = new AutoBuffer(inputStream);
       final Freezable freezable = gridAutoBuffer.get();
@@ -52,11 +49,14 @@ public class GridImportExportHandler extends Handler {
         throw new IllegalArgumentException(String.format("Given file '%s' is not a Grid", gridImportV3.grid_path));
       }
       final Grid grid = (Grid) freezable;
+      URI gridReferencesUri = FileUtils.getURI(recovery.referencesMetaFile(grid));
+      if (gridImportV3.load_frames && !PersistUtils.exists(gridReferencesUri)) {
+        throw new IllegalArgumentException("Requested to load with data frames, but the grid was saved without frames.");
+      }
 
-      final String gridDirectory = persist.getParent(gridUri.toString());
       grid.importModelsBinary(gridDirectory);
       if (gridImportV3.load_frames) {
-        new Recovery<Grid>(gridDirectory).loadReferences(grid);
+        recovery.loadReferences(grid);
       }
       DKV.put(grid);
       return new KeyV3.GridKeyV3(grid._key);

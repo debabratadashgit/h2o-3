@@ -297,7 +297,7 @@ public class XGBoostSteps extends ModelingSteps {
                                             .stoppingTolerance(xgBoostParameters._stopping_tolerance)
                                             .build())
                             ),
-                            false,
+                            null,
                             GridSearch.SEQUENTIAL_MODEL_BUILDING
                     ), result);
                 }
